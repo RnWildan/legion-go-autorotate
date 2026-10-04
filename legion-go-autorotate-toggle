@@ -1,0 +1,23 @@
+#!/bin/bash
+# =============================================================================
+# Toggle Legion Go auto-rotation on/off
+# =============================================================================
+
+FLAG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/driftwm/autorotate-disabled"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+
+if [ -f "$FLAG_FILE" ]; then
+    # ── Re-enable autorotation ─────────────────────────────────────────────
+    rm -f "$FLAG_FILE"
+    echo "Autorotation: ON"
+    # Reset display to normal on re-enable
+    wlr-randr --output eDP-1 --transform normal 2>/dev/null || true
+    notify-send -t 1500 "Autorotation" "Enabled" 2>/dev/null || true
+else
+    # ── Disable autorotation ───────────────────────────────────────────────
+    touch "$FLAG_FILE"
+    echo "Autorotation: OFF (locked)"
+    # Lock display at current orientation
+    wlr-randr --output eDP-1 --transform normal 2>/dev/null || true
+    notify-send -t 1500 "Autorotation" "Disabled" 2>/dev/null || true
+fi

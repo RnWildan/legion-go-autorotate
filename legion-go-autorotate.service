@@ -1,0 +1,18 @@
+[Unit]
+Description=Legion Go Auto-Rotation
+Documentation=https://github.com/malbiruk/driftwm
+After=driftwm.service
+PartOf=graphical-session.target
+Requisite=driftwm.service
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/legion-go-autorotate
+ExecStopPost=-/bin/sh -c 'rm -f %h/.config/driftwm/autorotate-disabled'
+Restart=on-failure
+RestartSec=5
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target
