@@ -1,105 +1,75 @@
-# Legion Go Auto-Rotate
+# Legion Go Auto-Rotate (Niri)
 
-A Wayland auto-rotation daemon for the **Lenovo Legion Go** handheld, built for
-`wlr-randr`-compatible compositors (driftWM, niri, sway, Hyprland, …).
-
-Rotates the built-in display to match physical orientation using the
-accelerometer — so the screen follows the device when you flip it into
+Auto-rotation for the **Lenovo Legion Go** handheld on the **Niri** Wayland
+compositor. Rotates the built-in display to match physical orientation using
+the accelerometer — so the screen follows the device when you flip it into
 portrait or landscape.
 
-## Why this exists
+## How it works
 
-Handhelds like the Legion Go get held at every angle — flat on a desk, tilted
-back in your hands, flipped sideways. Naive "dominant axis" rotation logic
-flutters: a single noisy accelerometer reading can push the ratio over the
-threshold and flip the screen when you didn't mean to.
+A tiny daemon that pipes `monitor-sensor` (from `iio-sensor-proxy`) into
+`niri msg output … transform …`:
 
-This daemon solves that with a **two-stage design**:
+- **`monitor-sensor`** reads the accelerometer and emits orientation changes
+  (`normal`, `left-up`, `right-up`, `bottom-up`). It has battle-tested
+  hysteresis built in, so it handles the "tilted slightly backward" ambiguity
+  without fluttering.
+- **`niri msg output eDP-1 transform …`** applies the rotation live.
 
-1. **Primary — `iio-sensor-proxy`** (`monitor-sensor --accel`). The proxy has
-   battle-tested hysteresis built in, designed exactly for the "tilted
-   slightly backward" ambiguity. This is the path that runs in practice.
-2. **Fallback — direct sysfs** (when `monitor-sensor` isn't available). Reads
-   the accelerometer from `/sys/bus/iio/devices/` with:
-   - **Median filtering** (5 samples) to smooth jitter
-   - **Flat-clamping** — if the Z axis (screen-perpendicular) is >70% of the
-     dominant axis, the device is "too flat" to reliably determine
-     orientation, so rotation is held
-   - **Confirmation gating** — requires 3 consecutive identical readings
-     before switching
-   - **Axis-ratio threshold** — the dominant axis must be ≥1.4× the runner-up
+The daemon is a single `while read` loop — no polling, no sysfs math, no
+state. `monitor-sensor` does the heavy lifting.
 
 ## Files
 
-- `legion-go-autorotate` — the daemon (primary + fallback)
-- `legion-go-autorotate-toggle` — toggle auto-rotation on/off (flag-file based)
-- `legion-go-autorotate.service` — systemd user unit
+- `niri-autorotate.sh` — the daemon (monitor-sensor → niri transform)
+- `niri-rotate-toggle.sh` — toggle auto-rotation on/off (pgrep/pkill based)
 
 ## Requirements
 
-- A Wayland compositor with `wlr-randr` (driftWM, niri, sway, Hyprland, …)
-- `wlr-randr` on `PATH`
-- `iio-sensor-proxy` (optional — enables the primary path; the daemon falls
-  back to sysfs automatically if absent)
-- An accelerometer exposed via Linux IIO (`/sys/bus/iio/devices/`)
+- **Niri** Wayland compositor
+- `niri` on `PATH` (for `niri msg`)
+- `iio-sensor-proxy` (provides `monitor-sensor`)
+- An accelerometer exposed via Linux IIO
 
 ## Install
 
 ```bash
 # Copy the scripts into your PATH
-install -m755 legion-go-autorotate legion-go-autorotate-toggle ~/.local/bin/
+install -m755 niri-autorotate.sh niri-rotate-toggle.sh ~/.local/bin/
 
-# Install the systemd user service
-install -m644 legion-go-autorotate.service \
-  ~/.config/systemd/user/legion-go-autorotate.service
-
-# Enable + start
-systemctl --user daemon-reload
-systemctl --user enable --now legion-go-autorotate.service
+# Auto-start the daemon — add to your niri autostart config
+# (e.g. ~/.config/niri/config.kdl):
+#   spawn-sh-at-startup "~/.local/bin/niri-autorotate.sh"
 ```
-
-## Configure
-
-The daemon reads a few constants at the top of `legion-go-autorotate`:
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `DISPLAY_NAME` | `eDP-1` | Output to rotate |
-| `ACCEL_BASE` | `/sys/bus/iio/devices/iio:device1` | IIO device for the fallback path |
-| `POLL_INTERVAL` | `0.3` | Fallback poll interval (s) |
-| `MEDIAN_WINDOW` | `5` | Fallback median-filter window |
-| `CONFIRM_COUNT` | `3` | Consecutive identical readings to switch |
-| `FLAG_FILE` | `~/.config/driftwm/autorotate-disabled` | Toggle flag |
-
-> **Note:** the IIO device index (`iio:device1` vs `iio:device2`) can differ
-> between kernels. Check `ls /sys/bus/iio/devices/` and confirm which device
-> exposes `in_accel_{x,y,z}_raw` before relying on the fallback path.
 
 ## Toggle
 
-Bind `legion-go-autorotate-toggle` to a keybinding to lock/unlock rotation:
+Bind `niri-rotate-toggle.sh` to a keybinding (e.g. `Mod+Shift+R` in niri):
 
 ```bash
-~/.local/bin/legion-go-autorotate-toggle   # ON ⇄ OFF
+~/.local/bin/niri-rotate-toggle.sh   # ON ⇄ OFF
 ```
 
-It creates/removes the flag file; the daemon checks it each cycle and holds
-the current orientation while disabled.
+It checks whether the daemon is running; if so it kills it (and
+`monitor-sensor`), otherwise it starts it. Sends a desktop notification either
+way.
+
+## Configure
+
+The output name is hardcoded as `eDP-1` at the top of `niri-autorotate.sh`.
+Change it if your display uses a different name (check with `niri msg outputs`).
 
 ## Troubleshooting
 
 ```bash
-# Is the service running?
-systemctl --user status legion-go-autorotate.service
+# Is the daemon running?
+pgrep -af "niri-autorotate.sh"
 
-# Is rotation toggled off?
-ls -la ~/.config/driftwm/autorotate-disabled
+# Test the sensor directly
+monitor-sensor
 
-# Raw accelerometer values (fallback path)
-cat /sys/bus/iio/devices/iio:device1/in_accel_{x,y,z}_raw
-
-# Test the primary path
-monitor-sensor --accel
+# List outputs (confirm the name is eDP-1)
+niri msg outputs
 ```
 
 ## License
